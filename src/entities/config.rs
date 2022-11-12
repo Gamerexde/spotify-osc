@@ -17,9 +17,21 @@ pub struct ConfigFileParameters {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct ConfigFileGeneral {
+pub struct ConfigFileGeneralOsc {
     pub host_address: String,
     pub client_address: String,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ConfigFileGeneralWebServer {
+    pub host_address: String,
+    pub port: u16,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ConfigFileGeneral {
+    pub osc: ConfigFileGeneralOsc,
+    pub web_server: ConfigFileGeneralWebServer,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -37,8 +49,13 @@ impl Default for ConfigFile {
     fn default() -> Self {
         Self {
             general: ConfigFileGeneral {
-                host_address: "127.0.0.1:5568".to_string(),
-                client_address: "127.0.0.1:9000".to_string()
+                osc: ConfigFileGeneralOsc {
+                    host_address: "127.0.0.1:5568".to_string(),
+                    client_address: "127.0.0.1:9000".to_string() },
+                web_server: ConfigFileGeneralWebServer {
+                    host_address: "127.0.0.1".to_string(),
+                    port: 8080
+                }
             },
 
             spotify: ConfigFileSpotify {
@@ -60,6 +77,10 @@ impl Default for ConfigFile {
 impl ConfigFile {
     pub fn get_auth_base64(&self) -> String {
         base64::encode(format!("{}:{}", &self.spotify.client_id, &self.spotify.client_secret))
+    }
+
+    pub fn get_webserver_address(&self) -> (String, u16) {
+        (String::from(&self.general.web_server.host_address), self.general.web_server.port)
     }
 }
 

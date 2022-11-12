@@ -66,7 +66,7 @@ async fn main() {
 
     let cfg: Config<ConfigFile> = Config::new(PathBuf::from("config.toml"));
 
-    let sock = Arc::new(UdpSocket::bind(&cfg.cfg.general.host_address).await.unwrap());
+    let sock = Arc::new(UdpSocket::bind(&cfg.cfg.general.osc.host_address).await.unwrap());
 
     let config = Arc::new(Mutex::new(cfg));
 
@@ -94,23 +94,23 @@ async fn main() {
                                         let seek = res.progress_ms as f32 / res.item.duration_ms as f32;
                                         let spotify_seek_buff = encode_packet(String::from(&config.cfg.parameters.spotify_seek), vec![OscType::Float(seek)]).unwrap();
 
-                                        send_to_delay(&sock, &spotify_playing_buff, &config.cfg.general.client_address, Duration::from_millis(20)).await;
-                                        send_to_delay(&sock, &spotify_seek_buff, &config.cfg.general.client_address, Duration::from_millis(20)).await;
+                                        send_to_delay(&sock, &spotify_playing_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
+                                        send_to_delay(&sock, &spotify_seek_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
 
                                         if chatbox.changed(&res.item.id) {
                                             chatbox.update(&res.item.artists, &res.item.name, &res.item.id);
 
                                             let spotify_chatbox_buff = encode_packet(String::from(&config.cfg.parameters.spotify_chatbox),
-                                                                                     vec![OscType::String(format!("[Spotify] Playing: {} - {}", chatbox.artist, chatbox.song))]).unwrap();
-                                            send_to_delay(&sock, &spotify_chatbox_buff, &config.cfg.general.client_address, Duration::from_millis(20)).await;
+                                                                                     vec![OscType::String(format!("[Spotify] Playing: {} - {}", chatbox.artist, chatbox.song)), OscType::Bool(true)]).unwrap();
+                                            send_to_delay(&sock, &spotify_chatbox_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
                                         }
                                     }
                                     SpotifyValue::EMPTY => {
                                         let spotify_playing_buff = encode_packet(String::from(&config.cfg.parameters.spotify_playing), vec![OscType::Bool(false)]).unwrap();
                                         let spotify_seek_buff = encode_packet(String::from(&config.cfg.parameters.spotify_seek), vec![OscType::Float(0_f32)]).unwrap();
 
-                                        send_to_delay(&sock, &spotify_playing_buff, &config.cfg.general.client_address, Duration::from_millis(20)).await;
-                                        send_to_delay(&sock, &spotify_seek_buff, &config.cfg.general.client_address, Duration::from_millis(20)).await;
+                                        send_to_delay(&sock, &spotify_playing_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
+                                        send_to_delay(&sock, &spotify_seek_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
                                     }
                                 }
                             }
@@ -140,7 +140,10 @@ async fn main() {
         }
     });
 
-    HttpServer::new({
+    let cfg = config.clone();
+    let cfg = cfg.lock().await;
+
+    let http_server = HttpServer::new({
         let client = client.clone();
         let config = config.clone();
 
@@ -156,9 +159,10 @@ async fn main() {
                 .service(spotify_setup)
         }
     })
-        .bind(("127.0.0.1", 8080))
-        .unwrap()
-        .run()
-        .await
+        .bind(cfg.cfg.get_webserver_address())
         .unwrap();
+
+    drop(cfg);
+
+    http_server.run().await.unwrap();
 }

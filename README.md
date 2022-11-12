@@ -14,6 +14,7 @@ Addresses can be changed on the configuration to work in other programs, for now
 |------------------------------------|-------------------|
 | /avatar/parameters/spotify_playing | Boolean           |
 | /avatar/parameters/spotify_seek    | Float (Range 0-1) |
+| /chatbox/input                     | Vec(String, Bool) |
 
 ## Setup
 
