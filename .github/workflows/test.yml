@@ -1,22 +1,37 @@
-name: Rust
-
-on:
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+name: build
+on: [ push, pull_request ]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-
+    name:
     runs-on: ubuntu-latest
-
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            archive: spotify-osc
+          - target: x86_64-pc-windows-gnu
+            archive: spotify-osc
     steps:
-    - uses: actions/checkout@v3
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@master
+      - name: Change to nightly
+        run: rustup default nightly
+      - name: Add platform dependencies
+        run: rustup target add ${{ matrix.target }}
+      - name: Compile
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Upload artifacts for windows.
+        uses: actions/upload-artifact@v1
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        with:
+          name: ${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.archive }}.exe
+      - name: Upload artifacts if not windows.
+        uses: actions/upload-artifact@v1
+        if: matrix.target != 'x86_64-pc-windows-gnu'
+        with:
+          name: spotify-osc-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.archive }}
