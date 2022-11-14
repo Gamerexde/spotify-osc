@@ -16,6 +16,17 @@ Addresses can be changed on the configuration to work in other programs, for now
 | /avatar/parameters/spotify_seek    | Float (Range 0-1) |
 | /chatbox/input                     | Vec(String, Bool) |
 
+### Receive (Client to App)
+
+| Address                             | Datatype          |
+|-------------------------------------|-------------------|
+| /avatar/parameters/spotify_play     | Boolean           |
+| /avatar/parameters/spotify_stop     | Boolean           |
+| /avatar/parameters/spotify_next     | Boolean           |
+| /avatar/parameters/spotify_previous | Boolean           |
+| /avatar/parameters/spotify_volume   | Float (Range 0-1) |
+
+
 ## Setup
 
 ### Initial setup. 

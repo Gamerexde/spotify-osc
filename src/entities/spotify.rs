@@ -33,6 +33,12 @@ pub struct SpotifyAuthTokenPayload {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct SpotifySetActivePayload {
+    pub device_ids: Vec<String>,
+    pub play: bool
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SpotifyAuthRefreshTokenPayload {
     pub refresh_token: String,
     pub grant_type: String,
@@ -53,4 +59,38 @@ pub struct SpotifyAuthRefreshTokenResponse {
     pub expires_in: i32,
     pub refresh_token: String,
     pub scope: String
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct SpotifyDevice {
+    pub id: String,
+    pub is_active: bool,
+    pub volume_percent: u16
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct SpotifyDevices {
+    pub devices: Vec<SpotifyDevice>,
+}
+
+impl SpotifyDevices {
+    pub fn get_active(&self) -> Option<&SpotifyDevice> {
+        for device in &self.devices {
+            if device.is_active {
+                return Some(&device);
+            }
+        }
+
+        if !&self.devices.is_empty() {
+            return Some(&self.devices[0]);
+        }
+
+        None
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct SpotifyPlayback {
+    pub device: SpotifyDevice,
+    pub is_playing: bool
 }

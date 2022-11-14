@@ -13,7 +13,12 @@ pub struct ConfigFileSpotify {
 pub struct ConfigFileParameters {
     pub spotify_playing: String,
     pub spotify_seek: String,
-    pub spotify_chatbox: String
+    pub spotify_chatbox: String,
+    pub spotify_play: String,
+    pub spotify_stop: String,
+    pub spotify_next: String,
+    pub spotify_previous: String,
+    pub spotify_volume: String
 }
 
 #[derive(Deserialize, Serialize)]
@@ -50,7 +55,7 @@ impl Default for ConfigFile {
         Self {
             general: ConfigFileGeneral {
                 osc: ConfigFileGeneralOsc {
-                    host_address: "127.0.0.1:5568".to_string(),
+                    host_address: "127.0.0.1:9001".to_string(),
                     client_address: "127.0.0.1:9000".to_string() },
                 web_server: ConfigFileGeneralWebServer {
                     host_address: "127.0.0.1".to_string(),
@@ -68,7 +73,12 @@ impl Default for ConfigFile {
             parameters: ConfigFileParameters {
                 spotify_playing: "/avatar/parameters/spotify_playing".to_string(),
                 spotify_seek: "/avatar/parameters/spotify_seek".to_string(),
-                spotify_chatbox: "/chatbox/input".to_string()
+                spotify_chatbox: "/chatbox/input".to_string(),
+                spotify_play: "/avatar/parameters/spotify_play".to_string(),
+                spotify_stop: "/avatar/parameters/spotify_stop".to_string(),
+                spotify_next: "/avatar/parameters/spotify_next".to_string(),
+                spotify_previous: "/avatar/parameters/spotify_previous".to_string(),
+                spotify_volume: "/avatar/parameters/spotify_volume".to_string()
             }
         }
     }
