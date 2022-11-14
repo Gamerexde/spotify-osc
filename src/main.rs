@@ -200,6 +200,7 @@ fn task_set_spotify_volume(spotify: Arc<Mutex<Spotify>>,
     tokio::task::spawn({
         async move {
             loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
                 {
                     let active = spotify_volume_task_active.lock().await;
 
