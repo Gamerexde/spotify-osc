@@ -9,7 +9,7 @@ pub struct ConfigFileSpotify {
     pub refresh_token: String
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ConfigFileParameters {
     pub spotify_playing: String,
     pub spotify_seek: String,

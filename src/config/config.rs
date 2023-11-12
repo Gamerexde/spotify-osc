@@ -1,11 +1,12 @@
 use std::path::PathBuf;
+use confy::ConfyError;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 pub struct Config<T>
     where T: Serialize
 {
-    pub cfg: T,
+    pub cfg: Option<T>,
     pub path: PathBuf
 }
 
@@ -13,14 +14,21 @@ impl<T> Config<T>
     where T: Serialize + Default + DeserializeOwned
 {
     pub fn new(path: PathBuf) -> Self {
-        let cfg = confy::load_path(&path).unwrap();
-
         Self {
-            cfg,
+            cfg: None,
             path
         }
     }
-    pub fn write(&self) {
-        confy::store_path(&self.path, &self.cfg).unwrap();
+
+    pub fn reload(&mut self) -> Result<(), ConfyError> {
+        let cfg = confy::load_path(&self.path)?;
+
+        self.cfg = Some(cfg);
+        Ok(())
+    }
+    pub fn write(&self) -> Result<(), ConfyError> {
+        confy::store_path(&self.path, &self.cfg)?;
+
+        Ok(())
     }
 }

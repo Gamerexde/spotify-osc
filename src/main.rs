@@ -1,27 +1,30 @@
-use std::path::PathBuf;
+
+use std::future::Future;
+use std::ops::Deref;
+use std::path::{PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc};
-use std::time::Duration;
-use actix_web::{App, HttpServer, web};
 use log::{error, info, LevelFilter, warn};
-use rosc::{OscPacket, OscType};
+use rspotify::{AuthCodeSpotify, Credentials, OAuth, scopes, Token};
+use rspotify::clients::{BaseClient, OAuthClient};
 use simple_logger::SimpleLogger;
-use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
+use tiny_http::{Server};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::{mpsc, Mutex};
+use tokio::task;
 use crate::config::config::Config;
 use crate::entities::config::ConfigFile;
-use crate::entities::spotify::SpotifyInfoArtist;
-use crate::managers::spotify::{Spotify, SpotifyAuthError};
-use crate::routes::spotify::{spotify_callback, spotify_setup};
-use crate::routes::WebData;
-use crate::utils::osc::{encode_packet, send_to_delay};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc::Sender;
+use tray_item::{IconSource, TrayItem};
+use crate::event_loops::http::HttpEventLoop;
+use crate::event_loops::osc::OscEventLoop;
 
 mod utils;
 mod entities;
-mod routes;
-mod http;
 mod config;
-mod managers;
+mod event_loops;
+mod clients;
 
 struct Chatbox {
     pub artist: String,
@@ -42,6 +45,7 @@ impl Chatbox {
         !self.id.eq(id)
     }
 
+    /*
     pub fn update(&mut self, artists: &Vec<SpotifyInfoArtist>, song: &String, id: &String) {
         let mut artists_vec = Vec::new();
 
@@ -54,425 +58,252 @@ impl Chatbox {
         self.song = String::from(song);
         self.id = String::from(id)
     }
+
+     */
 }
 
-fn task_set_spotify_playback_play(spotify: Arc<Mutex<Spotify>>) -> JoinHandle<()> {
-    tokio::task::spawn({
-
-        async move {
-            let mut spotify = spotify.lock().await;
-
-            match spotify.get_playback_state().await {
-                Ok(res) => {
-                    match res {
-                        Some(res) => {
-                            if !res.is_playing {
-                                match spotify.set_playback_play(&res.device.id).await {
-                                    Ok(_) => {}
-                                    Err(_) => {}
-                                }
-                            }
-                        }
-                        None => {
-                            match spotify.get_devices().await {
-                                Ok(devices) => {
-                                    match devices.get_active() {
-                                        Some(device) => {
-                                            match spotify.set_playback_active(&device.id, true).await {
-                                                Ok(_) => {
-
-                                                }
-                                                Err(_) => {}
-                                            }
-                                        }
-                                        None => {}
-                                    }
-                                }
-                                Err(_) => {}
-                            }
-                        }
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-    })
+pub struct Tray {
+    tray: TrayItem,
+    authenticated_label_id: u32
 }
 
-fn task_set_spotify_playback_pause(spotify: Arc<Mutex<Spotify>>) -> JoinHandle<()> {
-    tokio::task::spawn({
+impl Tray {
+    fn new(tx: &Sender<TrayAction>) -> Self {
 
-        async move {
-            let mut spotify = spotify.lock().await;
+        let mut tray = TrayItem::new(
+            "Spotify OSC",
+            IconSource::Resource("aa-exe-icon"),
+        ).unwrap();
 
-            match spotify.get_playback_state().await {
-                Ok(res) => {
-                    match res {
-                        Some(res) => {
-                            if res.is_playing {
-                                match spotify.set_playback_pause(&res.device.id).await {
-                                    Ok(_) => {}
-                                    Err(_) => {}
-                                }
-                            }
-                        }
-                        None => {
-                            match spotify.get_devices().await {
-                                Ok(devices) => {
-                                    match devices.get_active() {
-                                        Some(device) => {
-                                            match spotify.set_playback_active(&device.id, false).await {
-                                                Ok(_) => {
+        tray.add_label("Spotify OSC").unwrap();
+        let authenticated_label_id = tray.inner_mut().add_label_with_id("Auth Status: Not Authenticated").unwrap();
 
-                                                }
-                                                Err(_) => {}
-                                            }
-                                        }
-                                        None => {}
-                                    }
-                                }
-                                Err(_) => {}
-                            }
-                        }
-                    }
-                }
-                Err(_) => {}
-            }
+        tray.inner_mut().add_separator().unwrap();
+
+
+        let setup_tx = tx.clone();
+        tray.add_menu_item("Setup", move || {
+            setup_tx.blocking_send(TrayAction::OpenSetup).unwrap();
+        }).unwrap();
+
+        let quit_tx = tx.clone();
+        tray.add_menu_item("Quit", move || {
+            quit_tx.blocking_send(TrayAction::Quit).unwrap();
+        }).unwrap();
+
+
+        Self {
+            tray,
+            authenticated_label_id
         }
-    })
+    }
+
+    fn set_authenticated_label(&mut self, text: &str) {
+        self.tray.inner_mut().set_label(text, self.authenticated_label_id).unwrap();
+    }
+
+
 }
 
-fn task_set_spotify_playback_next(spotify: Arc<Mutex<Spotify>>) -> JoinHandle<()> {
-    tokio::task::spawn({
-
-        async move {
-            let mut spotify = spotify.lock().await;
-
-            match spotify.get_devices().await {
-                Ok(devices) => {
-                    match devices.get_active() {
-                        Some(device) => {
-                            match spotify.set_playback_next(&device.id).await {
-                                Ok(_) => {
-
-                                }
-                                Err(_) => {}
-                            }
-                        }
-                        None => {}
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-    })
+enum TrayAction {
+    Quit, Owo, OpenSetup
 }
 
-fn task_set_spotify_playback_previous(spotify: Arc<Mutex<Spotify>>) -> JoinHandle<()> {
-    tokio::task::spawn({
 
-        async move {
-            let mut spotify = spotify.lock().await;
-
-            match spotify.get_devices().await {
-                Ok(devices) => {
-                    match devices.get_active() {
-                        Some(device) => {
-                            match spotify.set_playback_previous(&device.id).await {
-                                Ok(_) => {
-
-                                }
-                                Err(_) => {}
-                            }
-                        }
-                        None => {}
-                    }
-                }
-                Err(_) => {}
-            }
-        }
-    })
-}
-
-fn task_set_spotify_volume(spotify: Arc<Mutex<Spotify>>,
-                           spotify_volume: Arc<Mutex<(f32, f32)>>, spotify_volume_task_active: Arc<Mutex<bool>>
-) -> JoinHandle<()> {
-    tokio::task::spawn({
-        async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                {
-                    let active = spotify_volume_task_active.lock().await;
-
-                    if !*active {
-                        continue;
-                    }
-                }
-
-                let mut spotify_volume = spotify_volume.lock().await;
-
-                if spotify_volume.0 == spotify_volume.1 {
-                    continue;
-                }
-
-                spotify_volume.0 = spotify_volume.1;
-
-                let volume = spotify_volume.clone();
-
-                drop(spotify_volume);
-
-                let mut spotify = spotify.lock().await;
-
-                match spotify.get_devices().await {
-                    Ok(devices) => {
-                        let device = devices.get_active();
-
-                        match device {
-                            Some(device) => {
-                                let volume = (volume.1 * 100_f32) as u16;
-
-                                match spotify.set_volume(&device.id, volume).await {
-                                    Ok(_) => {}
-                                    Err(_) => {
-                                        error!("Something went wrong while setting the volume");
-                                    }
-                                }
-
-                                let mut active = spotify_volume_task_active.lock().await;
-                                *active = false;
-
-                            }
-                            None => {}
-                        }
-
-                    }
-                    Err(_) => {
-
-                    }
-                };
-            }
-        }
-    })
+pub struct AppData {
+    pub tray: Arc<Mutex<Tray>>,
+    pub config: Arc<Mutex<Config<ConfigFile>>>,
+    pub spotify: Arc<AuthCodeSpotify>,
+    pub http: Arc<Server>,
+    pub sock: Arc<UdpSocket>,
 }
 
 #[tokio::main]
 async fn main() {
     SimpleLogger::new().with_level(LevelFilter::Info).env().with_colors(true).init().unwrap();
 
+    let (tx, mut rx) = mpsc::channel::<TrayAction>(1);
+
+    let mut tray = Arc::new(Mutex::new(Tray::new(&tx)));
+
     info!("Spotify OSC");
 
-    let client = Arc::new(reqwest::Client::new());
+    info!("Starting up...");
 
-    let cfg: Config<ConfigFile> = Config::new(PathBuf::from("config.toml"));
-
-    let sock = Arc::new(UdpSocket::bind(&cfg.cfg.general.osc.host_address).await.unwrap());
-
-    let config = Arc::new(Mutex::new(cfg));
-
-    let spotify = Arc::new(Mutex::new(Spotify::new(client.clone(), config.clone())));
-
+    info!("Loading configuration...");
+    let config = Arc::new(Mutex::new(Config::<ConfigFile>::new(PathBuf::from("config.toml"))));
     {
-        let spotify = spotify.clone();
+        let mut config = config.lock().await;
 
-        let mut spotify = spotify.lock().await;
-
-        match spotify.authenticate().await {
+        match config.reload() {
             Ok(_) => {
-                info!("Spotify authenticated successfully!");
+                info!("Configuration file loaded!");
             }
-            Err(err) => {
-                match err {
-                    SpotifyAuthError::FAILED => {
-                        error!("Something went wrong while authenticating...");
+            Err(error) => {
+                error!("Something went wrong loading the configuration file. Error: {}", error.to_string());
+                return;
+            }
+        }
+    }
+
+    let spotify_data: (String, String, String);
+    {
+        let mut config = config.lock().await;
+        let cfg = config.cfg.as_ref().unwrap();
+
+        let client_id = cfg.spotify.client_id.clone();
+        let client_secret = cfg.spotify.client_secret.clone();
+        let redirect_uri = cfg.spotify.callback_url.clone();
+
+        if client_id.is_empty() || client_secret.is_empty() || redirect_uri.is_empty() {
+            error!("The client id, the client secret or the redirect url is missing in the configuration file, set them before starting the application.");
+            return;
+        }
+
+        spotify_data = (client_id, client_secret, redirect_uri);
+    }
+
+    let spotify: Arc<AuthCodeSpotify>;
+    {
+        let mut config = config.lock().await;
+        let mut cfg = config.cfg.as_mut().unwrap();
+
+        let scopes = scopes!("user-read-currently-playing", "user-read-playback-state", "user-modify-playback-state");
+
+        let oauth = OAuth {
+            scopes,
+            redirect_uri: spotify_data.2,
+            ..Default::default()
+        };
+
+        let creds = Credentials {
+            id: spotify_data.0,
+            secret: Some(spotify_data.1)
+        };
+
+        spotify = Arc::new(AuthCodeSpotify::new(creds, oauth));
+
+        if !cfg.spotify.refresh_token.is_empty() {
+            info!("Refresh token found!");
+            let mut token = spotify.token.lock().await.unwrap();
+
+            match token.as_mut() {
+                None => {
+                    // TODO: This may not work.
+                    *token = Some(Token {
+                        refresh_token: Some(cfg.spotify.refresh_token.clone()),
+                        ..Default::default()
+                    })
+                }
+                Some(token_ref) => {
+                    token_ref.refresh_token = Some(cfg.spotify.refresh_token.clone());
+                }
+            }
+
+            info!("Refreshing Spotify session with refresh token...");
+
+            drop(token);
+
+            match spotify.refresh_token().await {
+                Ok(_) => {
+                    let mut token = spotify.token.lock().await.unwrap();
+                    let mut token = token.as_ref().unwrap();
+
+                    cfg.spotify.token = token.access_token.clone();
+
+                    if let Some(refresh_token) = &token.refresh_token {
+                        cfg.spotify.refresh_token = refresh_token.clone();
                     }
-                    SpotifyAuthError::ConfigNotInitialized => {
-                        warn!("It appears that you haven't initialized spotify before, don't panic, just make sure to follow the initial setup instructions.");
-                    }
-                    _ => {}
+
+                    config.write().unwrap();
+
+                    let mut tray = tray.lock().await;
+                    tray.set_authenticated_label("Auth Status: Authenticated");
+                    info!("Spotify session refreshed successfully!")
+                }
+                Err(_) => {
+                    warn!("Spotify session couldn't be refreshed, please re-authenticate.")
                 }
             }
         }
     }
 
-    tokio::task::spawn({
-        let sock = sock.clone();
+    let osc_host_address: String;
+    {
+        let mut config = config.lock().await;
+        let mut cfg = config.cfg.as_mut().unwrap();
+
+        osc_host_address = cfg.general.osc.host_address.clone();
+    }
+
+    info!("Starting OSC udp socket...");
+    let sock = match UdpSocket::bind(osc_host_address).await {
+        Ok(socket) => {
+            Arc::new(socket)
+        }
+        Err(_) => {
+            error!("Can't open OSC udp socket, this may be due to another program using the same port.");
+            panic!();
+        }
+    };
+
+    info!("OSC udp socket initialized!");
+
+    let address: (String, u16);
+
+    {
+        let config = config.lock().await;
+
+        let config = config.cfg.as_ref().unwrap();
+
+        if !config.general.web_server.host_address.is_empty() {
+            address = (config.general.web_server.host_address.clone(), config.general.web_server.port);
+        } else {
+            error!("Host address is empty, please set it.");
+            return;
+        }
+    };
+
+    info!("Starting http server...");
+    let http = Arc::new(Server::http(format!("{}:{}", address.0, address.1))
+        .expect("Couldn't create HTTP server, check the configuration."));
+
+    let app_data = Arc::new(AppData {
+        spotify: spotify.clone(),
+        tray: tray.clone(),
+        config: config.clone(),
+        http: http.clone(),
+        sock: sock.clone()
+    });
+
+    info!("Web server started on {}:{}", address.0, address.1);
+
+    let mut http_event_loop = HttpEventLoop::new(app_data.clone());
+
+    http_event_loop.start();
+
+    let mut osc_event_loop = OscEventLoop::new(app_data.clone());
+
+    osc_event_loop.start();
+
+    let tray_event_loop = task::spawn({
         let spotify = spotify.clone();
-        let config = config.clone();
-
-        let spotify_volume = Arc::new(Mutex::new((0_f32, 0_f32)));
-        let spotify_volume_task_active = Arc::new(Mutex::new(false));
-
-        let _ = task_set_spotify_volume(spotify.clone(), spotify_volume.clone(), spotify_volume_task_active.clone());
 
         async move {
-            let mut buf = [0u8; rosc::decoder::MTU];
-
             loop {
-                match sock.recv_from(&mut buf).await {
-                    Ok((size, _)) => {
-                        let (_, packet) = rosc::decoder::decode_udp(&buf[..size]).unwrap();
-
-                        match packet {
-                            OscPacket::Message(msg) => {
-                                let config = config.lock().await;
-                                let address = msg.addr.to_string();
-
-                                if address.eq(&config.cfg.parameters.spotify_play) {
-                                    let msg = msg.args[0].to_owned();
-
-                                    match msg.bool() {
-                                        None => {}
-                                        Some(res) => {
-                                            if res {
-                                                let _ = task_set_spotify_playback_play(spotify.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                                if address.eq(&config.cfg.parameters.spotify_stop) {
-                                    let msg = msg.args[0].to_owned();
-
-                                    match msg.bool() {
-                                        None => {}
-                                        Some(res) => {
-                                            if res {
-                                                let _ = task_set_spotify_playback_pause(spotify.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                                if address.eq(&config.cfg.parameters.spotify_next) {
-                                    let msg = msg.args[0].to_owned();
-
-                                    match msg.bool() {
-                                        None => {}
-                                        Some(res) => {
-                                            if res {
-                                                let _ = task_set_spotify_playback_next(spotify.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                                if address.eq(&config.cfg.parameters.spotify_previous) {
-                                    let msg = msg.args[0].to_owned();
-
-                                    match msg.bool() {
-                                        None => {}
-                                        Some(res) => {
-                                            if res {
-                                                let _ = task_set_spotify_playback_previous(spotify.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                                if address.eq(&config.cfg.parameters.spotify_volume) {
-                                    let msg = msg.args[0].to_owned();
-
-                                    match msg.float() {
-                                        None => {}
-                                        Some(val) => {
-                                            {
-                                                let mut spotify_volume = spotify_volume.lock().await;
-                                                spotify_volume.1 = val;
-                                            }
-
-                                            {
-                                                let mut spotify_volume_task_active = spotify_volume_task_active.lock().await;
-                                                *spotify_volume_task_active = true;
-                                            }
-
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
+                match rx.recv().await.unwrap() {
+                    TrayAction::Quit => {
+                        info!("Bye");
+                        return;
                     }
-                    Err(_) => {
-
+                    TrayAction::OpenSetup => {
+                        open::that(spotify.get_authorize_url(true).unwrap()).unwrap();
                     }
+                    _ => {}
                 }
             }
         }
     });
 
-    tokio::task::spawn({
-        let sock = sock.clone();
-        let config = config.clone();
-        let spotify = spotify.clone();
-
-        async move {
-            let mut chatbox = Chatbox::new();
-
-            loop {
-                tokio::time::sleep(Duration::from_secs(4)).await;
-                {
-                    let mut spotify = spotify.lock().await;
-
-                    match spotify.now_playing().await {
-                        Ok(res) => {
-                            let config = config.lock().await;
-
-                            match res {
-                                Some(res) => {
-
-                                    let spotify_playing_buff = encode_packet(String::from(&config.cfg.parameters.spotify_playing), vec![OscType::Bool(res.is_playing)]).unwrap();
-
-                                    let seek = res.progress_ms as f32 / res.item.duration_ms as f32;
-                                    let spotify_seek_buff = encode_packet(String::from(&config.cfg.parameters.spotify_seek), vec![OscType::Float(seek)]).unwrap();
-
-                                    send_to_delay(&sock, &spotify_playing_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
-                                    send_to_delay(&sock, &spotify_seek_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
-
-                                    if chatbox.changed(&res.item.id) {
-                                        chatbox.update(&res.item.artists, &res.item.name, &res.item.id);
-
-                                        let spotify_chatbox_buff = encode_packet(String::from(&config.cfg.parameters.spotify_chatbox),
-                                                                                 vec![OscType::String(format!("[Spotify] Playing: {} - {}", chatbox.artist, chatbox.song)), OscType::Bool(true)]).unwrap();
-                                        send_to_delay(&sock, &spotify_chatbox_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
-                                    }
-                                }
-                                None => {
-                                    let spotify_playing_buff = encode_packet(String::from(&config.cfg.parameters.spotify_playing), vec![OscType::Bool(false)]).unwrap();
-                                    let spotify_seek_buff = encode_packet(String::from(&config.cfg.parameters.spotify_seek), vec![OscType::Float(0_f32)]).unwrap();
-
-                                    send_to_delay(&sock, &spotify_playing_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
-                                    send_to_delay(&sock, &spotify_seek_buff, &config.cfg.general.osc.client_address, Duration::from_millis(20)).await;
-                                }
-                            }
-                        }
-                        Err(_) => {}
-                    }
-                }
-            }
-        }
-    });
-
-    let cfg = config.clone();
-    let cfg = cfg.lock().await;
-
-    let http_server = HttpServer::new({
-        let client = client.clone();
-        let config = config.clone();
-        let spotify = spotify.clone();
-
-        let web_data = WebData {
-            client: client.clone(),
-            config,
-            spotify
-        };
-
-        move || {
-            App::new()
-                .app_data(web::Data::new(web_data.clone()))
-                .service(spotify_callback)
-                .service(spotify_setup)
-        }
-    })
-        .bind(cfg.cfg.get_webserver_address())
-        .unwrap();
-
-    drop(cfg);
-
-    http_server.run().await.unwrap();
+    tray_event_loop.await;
 }
