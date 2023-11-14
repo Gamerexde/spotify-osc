@@ -115,7 +115,7 @@ pub struct AppData {
     pub config: Arc<Mutex<Config<ConfigFile>>>,
     pub spotify: Arc<AuthCodeSpotify>,
     pub http: Arc<Server>,
-    pub sock: Arc<UdpSocket>,
+    pub sock: Arc<UdpSocket>
 }
 
 #[tokio::main]
@@ -284,16 +284,15 @@ async fn main() {
 
     let mut osc_event_loop = OscEventLoop::new(app_data.clone());
 
-    osc_event_loop.start();
-
-    let tray_event_loop = task::spawn({
+    task::spawn({
         let spotify = spotify.clone();
 
         async move {
             loop {
                 match rx.recv().await.unwrap() {
                     TrayAction::Quit => {
-                        info!("Bye");
+                        http_event_loop.stop();
+                        osc_event_loop.stop();
                         return;
                     }
                     TrayAction::OpenSetup => {
@@ -303,7 +302,5 @@ async fn main() {
                 }
             }
         }
-    });
-
-    tray_event_loop.await;
+    }).await.unwrap();
 }

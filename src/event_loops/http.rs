@@ -68,7 +68,6 @@ impl HttpEventLoop {
                                     let _ = rq.respond(response);
                                 }
                                 Some(code) => {
-                                    info!("{}", code.to_owned().1);
                                     match spotify.request_token(code.to_owned().1).await {
                                         Ok(_) => {
                                             let mut config = config.lock().await;
@@ -116,6 +115,7 @@ impl HttpEventLoop {
     pub fn stop(&mut self) {
         if let Some(handle) = self.thread.take() {
             handle.abort();
+            self.thread = None;
         }
     }
 }
